@@ -7,7 +7,7 @@ import datetime
 import os
 from keras.preprocessing.sequence import pad_sequences
 from utils import Utils
-from retrival_model import SMN
+from retrieval_model import SMN
 
 
 ### data preprocess
@@ -68,7 +68,6 @@ smn = SMN(max_num_utterance=5,
           max_sentence_len=20,
           total_words=vocab_size)
 smn.build_model()
-smn.train_model(all_sequences, all_responses_true)
-
-
+smn.train_model(all_sequences, all_responses_true, use_pre_trained=False)
+# smn.train_model(all_sequences, all_responses_true, use_pre_trained=True, pre_trained_modelpath='./model/model-44800')
 

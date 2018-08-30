@@ -22,6 +22,7 @@ class SMN():
                  rnn_units=100,
                  total_words=66958,
                  batch_size=32,
+                 max_epoch=100,
                  num_checkpoints=10,
                  evaluate_every=100,
                  checkpoint_every=100):
@@ -34,6 +35,7 @@ class SMN():
         self.rnn_units = rnn_units
         self.total_words = total_words
         self.batch_size = batch_size
+        self.max_epoch = max_epoch
         self.num_checkpoints = num_checkpoints
         self.evaluate_every = evaluate_every
         self.checkpoint_every = checkpoint_every
@@ -115,12 +117,16 @@ class SMN():
                                            time_major=True, scope='final_GRU')  # TODO: check time_major
         
         # output layer
-        logits = tf.layers.dense(last_hidden, 2, kernel_initializer=tf.contrib.layers.xavier_initializer(), name='final_v')
-        self.y_pred = tf.nn.softmax(logits)
+        output = tf.layers.dense(last_hidden, 2, kernel_initializer=tf.contrib.layers.xavier_initializer(), name='final_v')
+        self.logits = tf.nn.softmax(output, name='y_logits')
+        self.y_pred = tf.cast(tf.argmax(input=output, axis=1), 'int32', name='y_pred')
 
         # loss
-        self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self.y_true, logits=logits), name='loss')
-        tf.summary.scalar('loss', self.loss)
+        self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self.y_true, logits=output), name='loss')
+
+        # accuracy
+        correct_predictions = tf.equal(self.y_pred, self.y_true)
+        self.accuracy = tf.reduce_mean(tf.cast(correct_predictions, 'float'), name='accuracy')
 
         # optimize
         self.global_step = tf.Variable(0, trainable=False, name='global_step')
@@ -157,10 +163,7 @@ class SMN():
         evaluate.ComputeR2_1(all_candidate_scores,labels)
         '''
     
-    def train_model(self, all_sequences, all_responses_true, countinue_train=False, previous_modelpath="model"):
-        # init = tf.global_variables_initializer()
-        # saver = tf.train.Saver()
-        # merged = tf.summary.merge_all()
+    def train_model(self, all_sequences, all_responses_true, use_pre_trained=False, pre_trained_modelpath='./model/pre-trained-model'):
         with tf.Session() as sess:
             # output directory for models and summaries
             timestamp = str(int(time.time()))
@@ -171,8 +174,9 @@ class SMN():
             for var in tf.trainable_variables():
                 tf.summary.histogram(name=var.name, values=var)
 
-            # summaries for loss
+            # summaries for loss and accuracy
             loss_summary = tf.summary.scalar('loss', self.loss)
+            acc_summary = tf.summary.scalar('accuracy', self.accuracy)
 
             # train summaries
             train_summary_op = tf.summary.merge_all()
@@ -194,6 +198,11 @@ class SMN():
 
             # initialize all variables
             sess.run(tf.global_variables_initializer())
+
+            # use pre-trained model to continue
+            if use_pre_trained:
+                print('reloading model parameters...')
+                saver.restore(sess, pre_trained_modelpath)
             
             # get input data
             actions = all_responses_true[:]
@@ -207,7 +216,7 @@ class SMN():
             
             low = 0
             epoch = 1
-            while epoch < 10:
+            while epoch <= self.max_epoch:
                 n_sample = min(low + self.batch_size, history.shape[0]) - low
                 negative_indices = [np.random.randint(0, actions.shape[0], n_sample) for _ in range(self.negative_samples)]
                 negs = [actions[negative_indices[i], :] for i in range(self.negative_samples)]
@@ -219,11 +228,12 @@ class SMN():
                     self.response_len: np.concatenate([true_utt_len[low:low + n_sample]] + negs_len, axis=0),
                     self.y_true: np.concatenate([np.ones(n_sample)] + [np.zeros(n_sample)] * self.negative_samples, axis=0)
                 }
-                _, step, summaries, loss = sess.run(
-                        [self.train_op, self.global_step, train_summary_op, self.loss],
-                        feed_dict)
+                _, step, summaries, loss, accuracy, y_logits, y_pred, y_true = sess.run(
+                    [self.train_op, self.global_step, train_summary_op, self.loss, self.accuracy, self.logits, self.y_pred, self.y_true],
+                    feed_dict)
+                y_pred_proba = y_logits[:,1]
                 timestr = datetime.datetime.now().isoformat()
-                print('{}: => epoch {} | step {}| loss {:g}'.format(timestr, epoch, step, loss))
+                print('{}: => epoch {} | step {}| loss {:g}| acc {:g}'.format(timestr, epoch, step, loss, accuracy))
                 train_summary_writer.add_summary(summaries, step)
                 
                 current_step = tf.train.global_step(sess, self.global_step)
@@ -233,7 +243,6 @@ class SMN():
                     # print("loss", sess.run(self.loss, feed_dict=feed_dict))
                     # self.Evaluate(sess)
                 if current_step % self.checkpoint_every == 0:
-                    saver = tf.train.Saver(tf.global_variables(), max_to_keep=self.num_checkpoints)
                     path = saver.save(sess=sess, save_path=checkpoint_prefix, global_step=self.global_step)
                     print('\nSaved model checkpoint to {}\n'.format(path))
                 if low >= history.shape[0]:
