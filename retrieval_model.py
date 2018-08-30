@@ -175,8 +175,8 @@ class SMN():
                 tf.summary.histogram(name=var.name, values=var)
 
             # summaries for loss and accuracy
-            loss_summary = tf.summary.scalar('loss', self.loss)
-            acc_summary = tf.summary.scalar('accuracy', self.accuracy)
+            loss_summary = tf.summary.scalar('summary_loss', self.loss)
+            acc_summary = tf.summary.scalar('summary_accuracy', self.accuracy)
 
             # train summaries
             train_summary_op = tf.summary.merge_all()
