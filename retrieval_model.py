@@ -131,11 +131,11 @@ class SMN():
             correct_predictions = tf.equal(self.y_pred, self.y_true)
             self.accuracy = tf.reduce_mean(tf.cast(correct_predictions, 'float'), name='accuracy')
 
-            # optimize
-            self.global_step = tf.Variable(0, trainable=False, name='global_step')
-            optimizer = tf.train.AdamOptimizer(learning_rate=self.lr)
-            grads_and_vars = optimizer.compute_gradients(self.loss)
-            self.train_op = optimizer.apply_gradients(grads_and_vars, global_step=self.global_step, name='train_op')
+        # optimize
+        self.global_step = tf.Variable(0, trainable=False, name='global_step')
+        optimizer = tf.train.AdamOptimizer(learning_rate=self.lr)
+        grads_and_vars = optimizer.compute_gradients(self.loss)
+        self.train_op = optimizer.apply_gradients(grads_and_vars, global_step=self.global_step, name='train_op')
     
 
     def Evaluate(self, sess):
@@ -167,7 +167,8 @@ class SMN():
         '''
     
     def train_model(self, all_sequences, all_responses_true, use_pre_trained=False, pre_trained_modelpath='./model/pre-trained-model'):
-        with tf.Session() as sess:
+        config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
+        with tf.Session(config=config) as sess:
             # output directory for models and summaries
             timestamp = str(int(time.time()))
             out_dir = os.path.abspath(os.path.join(os.curdir, 'log', timestamp))
@@ -236,7 +237,7 @@ class SMN():
                     feed_dict)
                 y_pred_proba = y_logits[:,1]
                 timestr = datetime.datetime.now().isoformat()
-                print('{}: => epoch {} | step {}| loss {:g}| acc {:g}'.format(timestr, epoch, step, loss, accuracy))
+                print('{}: => epoch {} | step {} | loss {:.6f} | acc {:.6f}'.format(timestr, epoch, step, loss, accuracy))
                 train_summary_writer.add_summary(summaries, step)
                 
                 current_step = tf.train.global_step(sess, self.global_step)

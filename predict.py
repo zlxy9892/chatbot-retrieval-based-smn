@@ -10,6 +10,15 @@ from utils import Utils
 from retrieval_model import SMN
 
 
+### hyper parameters
+device_name = '/cpu:0'
+max_num_utterance = 5
+negative_samples = 1
+max_sentence_len = 25
+word_embedding_size = 100
+rnn_units = 200
+
+
 ### data preprocess
 utils = Utils()
 
@@ -64,10 +73,11 @@ print('min_response_length: {}'.format(np.min(all_responses_len)))
 
 ### start training
 print('\nstart predicting...\n')
-smn = SMN(device_name='/cpu:0',
-          max_num_utterance=5,
-          max_sentence_len=20,
-          total_words=vocab_size)
+smn = SMN(device_name=device_name,
+          max_num_utterance=max_num_utterance,
+          max_sentence_len=max_sentence_len,
+          word_embedding_size=word_embedding_size,
+          rnn_units=rnn_units)
 smn.build_model()
 
 model_file = './model/model-3400'
