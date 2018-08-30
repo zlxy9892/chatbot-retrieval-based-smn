@@ -63,12 +63,36 @@ print('min_response_length: {}'.format(np.min(all_responses_len)))
 
 
 ### start training
-print('\nstart training the model...\n')
+print('\nstart predicting...\n')
 smn = SMN(device_name='/cpu:0',
           max_num_utterance=5,
           max_sentence_len=20,
           total_words=vocab_size)
 smn.build_model()
-smn.train_model(all_sequences, all_responses_true, use_pre_trained=False)
-# smn.train_model(all_sequences, all_responses_true, use_pre_trained=True, pre_trained_modelpath='./model/model-44800')
 
+model_file = './model/model-3400'
+
+actions = all_responses_true[:]
+history, history_len = utils.multi_sequences_padding(all_sequences, 20)
+true_utt_len = np.array(utils.get_sequences_length(all_responses_true, maxlen=20))
+true_utt = np.array(pad_sequences(all_responses_true, padding='post', maxlen=20))
+actions_len = np.array(utils.get_sequences_length(actions, maxlen=20))
+actions = np.array(pad_sequences(actions, padding='post', maxlen=20))
+history, history_len = np.array(history), np.array(history_len)
+
+low = 0
+n_sample = 30
+negative_samples = 1
+negative_indices = [np.random.randint(0, actions.shape[0], n_sample) for _ in range(negative_samples)]
+negs = [actions[negative_indices[i], :] for i in range(negative_samples)]
+negs_len = [actions_len[negative_indices[i]] for i in range(negative_samples)]
+
+dev_utterances = np.concatenate([history[low:low + n_sample]] * (negative_samples + 1), axis=0)
+dev_responses = np.concatenate([true_utt[low:low + n_sample]] + negs, axis=0)
+dev_utterances_len = np.concatenate([history_len[low:low + n_sample]] * (negative_samples + 1), axis=0)
+dev_responses_len = np.concatenate([true_utt_len[low:low + n_sample]] + negs_len, axis=0)
+y_true = np.concatenate([np.ones(n_sample)] + [np.zeros(n_sample)] * negative_samples, axis=0)
+
+y_pred_proba, y_pred = smn.predict(model_file, dev_utterances, dev_responses, dev_utterances_len, dev_responses_len)
+print(y_pred_proba)
+print(y_pred)

@@ -14,6 +14,7 @@ from utils import Utils
 
 class SMN():
     def __init__(self,
+                 device_name='/cpu:0',
                  lr=0.001,
                  max_num_utterance=5,
                  negative_samples=1,
@@ -27,6 +28,7 @@ class SMN():
                  evaluate_every=100,
                  checkpoint_every=100):
         self.utils = Utils()
+        self.device_name = device_name
         self.lr = lr
         self.max_num_utterance = max_num_utterance
         self.negative_samples = negative_samples
@@ -57,82 +59,83 @@ class SMN():
 
     def build_model(self):
         # placeholders
-        self.utterance_ph = tf.placeholder(tf.int32, shape=(None, self.max_num_utterance, self.max_sentence_len))
-        self.response_ph = tf.placeholder(tf.int32, shape=(None, self.max_sentence_len))
-        self.y_true = tf.placeholder(tf.int32, shape=(None,))
+        self.utterance_ph = tf.placeholder(tf.int32, shape=(None, self.max_num_utterance, self.max_sentence_len), name='utterances')
+        self.response_ph = tf.placeholder(tf.int32, shape=(None, self.max_sentence_len), name='responses')
+        self.y_true = tf.placeholder(tf.int32, shape=(None,), name='y_true')
         # self.embedding_ph = tf.placeholder(tf.float32, shape=(self.total_words, self.word_embedding_size))
-        self.response_len = tf.placeholder(tf.int32, shape=(None,))
-        self.all_utterance_len_ph = tf.placeholder(tf.int32, shape=(None, self.max_num_utterance))
+        self.response_len = tf.placeholder(tf.int32, shape=(None,), name='responses_len')
+        self.all_utterance_len_ph = tf.placeholder(tf.int32, shape=(None, self.max_num_utterance), name='utterances_len')
 
-        # word_embedding vector
-        word_embeddings = tf.get_variable('word_embeddings_v', initializer=tf.random_normal_initializer(mean=0.0, stddev=0.1), shape=(self.total_words, self.word_embedding_size), dtype=tf.float32, trainable=True)
-        # word_embeddings = tf.get_variable('word_embeddings_v', shape=(self.total_words, self.word_embedding_size), dtype=tf.float32, trainable=False)
-        # self.embedding_init = word_embeddings.assign(self.embedding_ph)
+        with tf.device(self.device_name):
+            # word_embedding vector
+            word_embeddings = tf.get_variable('word_embeddings_v', initializer=tf.random_normal_initializer(mean=0.0, stddev=0.1), shape=(self.total_words, self.word_embedding_size), dtype=tf.float32, trainable=True)
+            # word_embeddings = tf.get_variable('word_embeddings_v', shape=(self.total_words, self.word_embedding_size), dtype=tf.float32, trainable=False)
+            # self.embedding_init = word_embeddings.assign(self.embedding_ph)
 
-        # utterance embedding
-        all_utterance_embeddings = tf.nn.embedding_lookup(word_embeddings, self.utterance_ph)
-        all_utterance_embeddings = tf.unstack(all_utterance_embeddings, num=self.max_num_utterance, axis=1)
-        all_utterance_len = tf.unstack(self.all_utterance_len_ph, num=self.max_num_utterance, axis=1)
+            # utterance embedding
+            all_utterance_embeddings = tf.nn.embedding_lookup(word_embeddings, self.utterance_ph)
+            all_utterance_embeddings = tf.unstack(all_utterance_embeddings, num=self.max_num_utterance, axis=1)
+            all_utterance_len = tf.unstack(self.all_utterance_len_ph, num=self.max_num_utterance, axis=1)
 
-        # response embedding
-        response_embeddings = tf.nn.embedding_lookup(word_embeddings, self.response_ph)
-        
-        # GRU initialize
-        sentence_GRU = tf.nn.rnn_cell.GRUCell(self.rnn_units, kernel_initializer=tf.orthogonal_initializer())
-        final_GRU = tf.nn.rnn_cell.GRUCell(self.rnn_units, kernel_initializer=tf.orthogonal_initializer())
+            # response embedding
+            response_embeddings = tf.nn.embedding_lookup(word_embeddings, self.response_ph)
+            
+            # GRU initialize
+            sentence_GRU = tf.nn.rnn_cell.GRUCell(self.rnn_units, kernel_initializer=tf.orthogonal_initializer())
+            final_GRU = tf.nn.rnn_cell.GRUCell(self.rnn_units, kernel_initializer=tf.orthogonal_initializer())
 
-        # matrix 1
-        A_matrix = tf.get_variable('A_matrix_v', shape=(self.rnn_units, self.rnn_units), initializer=tf.contrib.layers.xavier_initializer(), dtype=tf.float32)
-        reuse = None
+            # matrix 1
+            A_matrix = tf.get_variable('A_matrix_v', shape=(self.rnn_units, self.rnn_units), initializer=tf.contrib.layers.xavier_initializer(), dtype=tf.float32)
+            reuse = None
 
-        response_GRU_embeddings, _ = tf.nn.dynamic_rnn(sentence_GRU, response_embeddings, sequence_length=self.response_len, dtype=tf.float32,
-                                                       scope='sentence_GRU')
-        self.response_embedding_save = response_GRU_embeddings
-        response_embeddings = tf.transpose(response_embeddings, perm=[0, 2, 1])
-        response_GRU_embeddings = tf.transpose(response_GRU_embeddings, perm=[0, 2, 1])
+            response_GRU_embeddings, _ = tf.nn.dynamic_rnn(sentence_GRU, response_embeddings, sequence_length=self.response_len, dtype=tf.float32,
+                                                        scope='sentence_GRU')
+            self.response_embedding_save = response_GRU_embeddings
+            response_embeddings = tf.transpose(response_embeddings, perm=[0, 2, 1])
+            response_GRU_embeddings = tf.transpose(response_GRU_embeddings, perm=[0, 2, 1])
 
-        # generate matching vectors
-        matching_vectors = []
-        for utterance_embeddings, utterance_len in zip(all_utterance_embeddings, all_utterance_len):
-            matrix1 = tf.matmul(utterance_embeddings, response_embeddings)
-            utterance_GRU_embeddings, _ = tf.nn.dynamic_rnn(sentence_GRU, utterance_embeddings, sequence_length=utterance_len, dtype=tf.float32,
-                                                            scope='sentence_GRU')
-            matrix2 = tf.einsum('aij,jk->aik', utterance_GRU_embeddings, A_matrix)  # TODO:check this
-            matrix2 = tf.matmul(matrix2, response_GRU_embeddings)
-            matrix = tf.stack([matrix1, matrix2], axis=3, name='matrix_stack')
-            conv_layer = tf.layers.conv2d(matrix, filters=8, kernel_size=(3, 3), padding='VALID',
-                                          kernel_initializer=tf.contrib.keras.initializers.he_normal(),
-                                          activation=tf.nn.relu, reuse=reuse, name='conv')  # TODO: check other params
-            pooling_layer = tf.layers.max_pooling2d(conv_layer, (3, 3), strides=(3, 3),
-                                                    padding='VALID', name='max_pooling')  # TODO: check other params
-            matching_vector = tf.layers.dense(tf.contrib.layers.flatten(pooling_layer), 50,
-                                              kernel_initializer=tf.contrib.layers.xavier_initializer(),
-                                              activation=tf.tanh, reuse=reuse, name='matching_v')  # TODO: check wthether this is correct
-            if not reuse:
-                reuse = True
-            matching_vectors.append(matching_vector)
-        
-        # last hidden layer
-        _, last_hidden = tf.nn.dynamic_rnn(final_GRU, tf.stack(matching_vectors, axis=0, name='matching_stack'), dtype=tf.float32,
-                                           time_major=True, scope='final_GRU')  # TODO: check time_major
-        
-        # output layer
-        output = tf.layers.dense(last_hidden, 2, kernel_initializer=tf.contrib.layers.xavier_initializer(), name='final_v')
-        self.logits = tf.nn.softmax(output, name='y_logits')
-        self.y_pred = tf.cast(tf.argmax(input=output, axis=1), 'int32', name='y_pred')
+            # generate matching vectors
+            matching_vectors = []
+            for utterance_embeddings, utterance_len in zip(all_utterance_embeddings, all_utterance_len):
+                matrix1 = tf.matmul(utterance_embeddings, response_embeddings)
+                utterance_GRU_embeddings, _ = tf.nn.dynamic_rnn(sentence_GRU, utterance_embeddings, sequence_length=utterance_len, dtype=tf.float32,
+                                                                scope='sentence_GRU')
+                matrix2 = tf.einsum('aij,jk->aik', utterance_GRU_embeddings, A_matrix)  # TODO:check this
+                matrix2 = tf.matmul(matrix2, response_GRU_embeddings)
+                matrix = tf.stack([matrix1, matrix2], axis=3, name='matrix_stack')
+                conv_layer = tf.layers.conv2d(matrix, filters=8, kernel_size=(3, 3), padding='VALID',
+                                            kernel_initializer=tf.contrib.keras.initializers.he_normal(),
+                                            activation=tf.nn.relu, reuse=reuse, name='conv')  # TODO: check other params
+                pooling_layer = tf.layers.max_pooling2d(conv_layer, (3, 3), strides=(3, 3),
+                                                        padding='VALID', name='max_pooling')  # TODO: check other params
+                matching_vector = tf.layers.dense(tf.contrib.layers.flatten(pooling_layer), 50,
+                                                kernel_initializer=tf.contrib.layers.xavier_initializer(),
+                                                activation=tf.tanh, reuse=reuse, name='matching_v')  # TODO: check wthether this is correct
+                if not reuse:
+                    reuse = True
+                matching_vectors.append(matching_vector)
+            
+            # last hidden layer
+            _, last_hidden = tf.nn.dynamic_rnn(final_GRU, tf.stack(matching_vectors, axis=0, name='matching_stack'), dtype=tf.float32,
+                                            time_major=True, scope='final_GRU')  # TODO: check time_major
+            
+            # output layer
+            output = tf.layers.dense(last_hidden, 2, kernel_initializer=tf.contrib.layers.xavier_initializer(), name='final_v')
+            self.logits = tf.nn.softmax(output, name='y_logits')
+            self.y_pred = tf.cast(tf.argmax(input=output, axis=1), 'int32', name='y_pred')
 
-        # loss
-        self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self.y_true, logits=output), name='loss')
+            # loss
+            self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self.y_true, logits=output), name='loss')
 
-        # accuracy
-        correct_predictions = tf.equal(self.y_pred, self.y_true)
-        self.accuracy = tf.reduce_mean(tf.cast(correct_predictions, 'float'), name='accuracy')
+            # accuracy
+            correct_predictions = tf.equal(self.y_pred, self.y_true)
+            self.accuracy = tf.reduce_mean(tf.cast(correct_predictions, 'float'), name='accuracy')
 
-        # optimize
-        self.global_step = tf.Variable(0, trainable=False, name='global_step')
-        optimizer = tf.train.AdamOptimizer(learning_rate=self.lr)
-        grads_and_vars = optimizer.compute_gradients(self.loss)
-        self.train_op = optimizer.apply_gradients(grads_and_vars, global_step=self.global_step, name='train_op')
+            # optimize
+            self.global_step = tf.Variable(0, trainable=False, name='global_step')
+            optimizer = tf.train.AdamOptimizer(learning_rate=self.lr)
+            grads_and_vars = optimizer.compute_gradients(self.loss)
+            self.train_op = optimizer.apply_gradients(grads_and_vars, global_step=self.global_step, name='train_op')
     
 
     def Evaluate(self, sess):
@@ -248,6 +251,37 @@ class SMN():
                 if low >= history.shape[0]:
                     low = 0
                     epoch += 1
+    
+    def predict(self, model_file, dev_utterances, dev_responses, dev_utterances_len, dev_responses_len):
+        # self.build_model()
+        graph = tf.Graph()
+        with tf.Session(graph=graph) as sess:
+            # Load the saved meta graph and restore variables
+            saver = tf.train.import_meta_graph('{}.meta'.format(model_file))
+            saver.restore(sess, model_file)
+
+            # Access and create placeholders variables and create feed-dict to feed new data
+            graph = tf.get_default_graph()
+            ph_utterances = graph.get_tensor_by_name('utterances:0')
+            ph_responses = graph.get_tensor_by_name('responses:0')
+            ph_utterances_len = graph.get_tensor_by_name('utterances_len:0')
+            ph_responses_len = graph.get_tensor_by_name('responses_len:0')
+            ph_y_true = graph.get_tensor_by_name('y_true:0')
+            feed_dict = {
+                ph_utterances: dev_utterances,
+                ph_responses: dev_responses,
+                ph_utterances_len: dev_utterances_len,
+                ph_responses_len: dev_responses_len
+            }
+
+            op_y_logits = graph.get_tensor_by_name('y_logits:0')
+            op_y_pred = graph.get_tensor_by_name('y_pred:0')
+
+            y_logits, y_pred = sess.run([op_y_logits, op_y_pred], feed_dict)
+            y_pred_proba = y_logits[:,1]
+            # print(y_logits)
+            # print(y_pred)
+            return y_pred_proba, y_pred
 
 
 if __name__ == "__main__":
